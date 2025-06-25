@@ -1,0 +1,38 @@
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.cert.Certificate;
+import java.util.Base64;
+
+public class VerifyWithPublicKey {
+    public static void main(String[] args) throws Exception {
+        String keystorePath = "your_keystore.p12";
+        String keystorePassword = "password";
+        String alias = "your_alias";
+        String xmlFile = "pacs008.xml";
+        String signatureFile = "private_signature.txt";
+
+        // Load KeyStore
+        KeyStore keystore = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream(keystorePath)) {
+            keystore.load(fis, keystorePassword.toCharArray());
+        }
+
+        Certificate cert = keystore.getCertificate(alias);
+        PublicKey publicKey = cert.getPublicKey();
+
+        // Read the original message
+        byte[] message = Files.readAllBytes(Paths.get(xmlFile));
+
+        // Read the signature
+        byte[] signatureBytes = Base64.getDecoder().decode(Files.readAllBytes(Paths.get(signatureFile)));
+
+        // Verify
+        Signature signature = Signature.getInstance("MD5withRSA");
+        signature.initVerify(publicKey);
+        signature.update(message);
+        boolean isValid = signature.verify(signatureBytes);
+
+        System.out.println("Is the signature valid? " + isValid);
+    }
+}
