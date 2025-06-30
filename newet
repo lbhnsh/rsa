@@ -1,0 +1,88 @@
+import sun.security.pkcs.ContentInfo;
+import sun.security.pkcs.PKCS7;
+import sun.security.pkcs.SignerInfo;
+import sun.security.util.DerOutputStream;
+import sun.security.x509.AlgorithmId;
+import sun.security.x509.X500Name;
+
+import java.io.*;
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.security.cert.X509Certificate;
+import java.security.KeyStore;
+import java.util.Base64;
+
+public class Pkcs7DetachedSigner {
+
+    public static void main(String[] args) throws Exception {
+        // Step 1: Load PFX certificate
+        FileInputStream fis = new FileInputStream("sample_cert.pfx");
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        ks.load(fis, "password".toCharArray());
+        String alias = ks.aliases().nextElement();
+
+        PrivateKey privateKey = (PrivateKey) ks.getKey(alias, "password".toCharArray());
+        X509Certificate cert = (X509Certificate) ks.getCertificate(alias);
+
+        // Step 2: Load XML and extract payload after </AppHdr>
+        String xml = new String(java.nio.file.Files.readAllBytes(new File("sample_pacs008.xml").toPath()), StandardCharsets.UTF_8);
+        String payload = xml.replaceAll("(?s).*?</AppHdr>", "").trim();
+        byte[] dataToSign = payload.getBytes(StandardCharsets.UTF_8);
+
+        // Step 3: Sign using SHA256withRSA
+        Signature signer = Signature.getInstance("SHA256withRSA");
+        signer.initSign(privateKey);
+        signer.update(dataToSign);
+        byte[] signatureBytes = signer.sign();
+
+        // Step 4: Build PKCS7 (detached)
+        X500Name x500Name = X500Name.asX500Name(cert.getSubjectX500Principal());
+        BigInteger serial = cert.getSerialNumber();
+        AlgorithmId digestAlgorithmId = AlgorithmId.get("SHA-256");
+        AlgorithmId encryptionAlgorithmId = AlgorithmId.get("RSA");
+
+        SignerInfo signerInfo = new SignerInfo(
+                x500Name,
+                serial,
+                digestAlgorithmId,
+                null,
+                encryptionAlgorithmId,
+                signatureBytes,
+                null
+        );
+
+        PKCS7 pkcs7 = new PKCS7(
+                new AlgorithmId[]{digestAlgorithmId},
+                new ContentInfo(ContentInfo.DATA_OID, null), // detached
+                new X509Certificate[]{cert},
+                new SignerInfo[]{signerInfo}
+        );
+
+        // Step 5: Encode PKCS7
+        DerOutputStream dos = new DerOutputStream();
+        pkcs7.encodeSignedData(dos);  // MUST use encodeSignedData()
+        byte[] pkcs7Bytes = dos.toByteArray();
+
+        // Step 6: Base64 encode with required format
+        String base64 = Base64.getEncoder().encodeToString(pkcs7Bytes);
+        String formatted = formatBase64Signature(base64);
+        System.out.println("Final Base64 signature:\n" + formatted);
+
+        // Optional: show signature length for verification
+        System.out.println("Bytes: " + pkcs7Bytes.length);
+        System.out.println("Base64 chars: " + base64.length());
+    }
+
+    private static String formatBase64Signature(String base64) {
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        for (; i + 64 <= base64.length(); i += 64) {
+            sb.append(base64, i, i + 64).append("\n");
+        }
+        if (i < base64.length()) {
+            sb.append(base64.substring(i)).append("\n");
+        }
+        return sb.toString();
+    }
+}
