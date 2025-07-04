@@ -1,48 +1,39 @@
-import sun.security.pkcs.PKCS7;
-import sun.security.pkcs.SignerInfo;
-
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.KeyStore;
 import java.security.PublicKey;
+import java.security.Signature;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
 
-public class Pkcs7Verifier {
+public class SimpleSignatureVerifier {
 
     public static void main(String[] args) throws Exception {
-        // Step 1: Load PFX and extract public certificate
+        // Step 1: Load public key from PFX file
         FileInputStream fis = new FileInputStream("sample_cert.pfx");
         KeyStore ks = KeyStore.getInstance("PKCS12");
         ks.load(fis, "password".toCharArray());
         String alias = ks.aliases().nextElement();
         X509Certificate cert = (X509Certificate) ks.getCertificate(alias);
         PublicKey publicKey = cert.getPublicKey();
-        System.out.println("Public key used for verification:\n" + publicKey);
 
-        // Step 2: Load Base64 signature from file
-        String base64Signature = new String(Files.readAllBytes(new File("signature.txt").toPath()), StandardCharsets.UTF_8);
-        byte[] pkcs7Bytes = Base64.getMimeDecoder().decode(base64Signature);
+        // Step 2: Load signature from file (Base64)
+        byte[] signatureBytes = Base64.getMimeDecoder().decode(
+            new String(Files.readAllBytes(new File("signature.txt").toPath()), StandardCharsets.UTF_8)
+        );
 
-        // Step 3: Load XML and extract payload after </AppHdr>
+        // Step 3: Read XML and extract payload after </AppHdr>
         String xml = new String(Files.readAllBytes(new File("sample_pacs008.xml").toPath()), StandardCharsets.UTF_8);
         String payload = xml.replaceAll("(?s).*?</AppHdr>", "").trim();
         byte[] dataToVerify = payload.getBytes(StandardCharsets.UTF_8);
 
-        // Step 4: Parse PKCS7 and verify
-        ByteArrayInputStream bais = new ByteArrayInputStream(pkcs7Bytes);
-        PKCS7 pkcs7 = new PKCS7(bais);
-        SignerInfo[] infos = pkcs7.getSignerInfos();
+        // Step 4: Verify using SHA256withRSA
+        Signature verifier = Signature.getInstance("SHA256withRSA");
+        verifier.initVerify(publicKey);
+        verifier.update(dataToVerify);
 
-        boolean verified = false;
-        for (SignerInfo info : infos) {
-            if (info.verify(cert, dataToVerify)) {
-                verified = true;
-                break;
-            }
-        }
-
-        System.out.println("Signature valid? " + (verified ? "✅ YES" : "❌ NO"));
+        boolean isValid = verifier.verify(signatureBytes);
+        System.out.println("Signature valid? " + (isValid ? "✅ YES" : "❌ NO"));
     }
 }
