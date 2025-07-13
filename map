@@ -1,0 +1,132 @@
+Sub Module1()
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Payloads")
+    Dim wsReq As Worksheet, wsRes As Worksheet
+
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Worksheets("Request_Analysis").Delete
+    Worksheets("Response_Analysis").Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+
+    Set wsReq = ThisWorkbook.Sheets.Add(After:=ws)
+    wsReq.Name = "Request_Analysis"
+    Set wsRes = ThisWorkbook.Sheets.Add(After:=wsReq)
+    wsRes.Name = "Response_Analysis"
+    
+    Call AnalyzeJsonColumn_NoReferences(ws, 1, wsReq) ' Request JSON (Column A)
+    Call AnalyzeJsonColumn_NoReferences(ws, 2, wsRes) ' Response JSON (Column B)
+End Sub
+
+Sub AnalyzeJsonColumn_NoReferences(wsSource As Worksheet, col As Long, wsOut As Worksheet)
+    Dim row As Long, totalRows As Long
+    totalRows = 0
+    Dim lastRow As Long: lastRow = wsSource.Cells(wsSource.Rows.Count, col).End(xlUp).row
+
+    Dim fieldMap As Object: Set fieldMap = CreateObject("Scripting.Dictionary")
+
+    For row = 2 To lastRow
+        Dim jsonText As String: jsonText = Trim(wsSource.Cells(row, col).Value)
+        If jsonText = "" Then GoTo SkipRow
+
+        Dim parsedDict As Object: Set parsedDict = ParseFlatJson(jsonText)
+        If parsedDict Is Nothing Then GoTo SkipRow
+
+        totalRows = totalRows + 1
+        Dim k As Variant
+        For Each k In parsedDict.Keys
+            Dim val: val = parsedDict(k)
+            If Not fieldMap.Exists(k) Then
+                Dim fInfo As Object: Set fInfo = CreateObject("Scripting.Dictionary")
+                fInfo("min") = Len(val)
+                fInfo("max") = Len(val)
+                fInfo("count") = 1
+                fInfo("type") = GuessType(val)
+                fInfo("sample") = val
+                fieldMap.Add k, fInfo
+            Else
+                Set fInfo = fieldMap(k)
+                fInfo("min") = WorksheetFunction.Min(fInfo("min"), Len(val))
+                fInfo("max") = WorksheetFunction.Max(fInfo("max"), Len(val))
+                fInfo("count") = fInfo("count") + 1
+                fInfo("type") = MergeType(fInfo("type"), GuessType(val))
+            End If
+        Next
+SkipRow:
+    Next row
+
+    ' Output
+    With wsOut
+        .Cells(1, 1).Value = "Field Name"
+        .Cells(1, 2).Value = "Sample Value"
+        .Cells(1, 3).Value = "Min Length"
+        .Cells(1, 4).Value = "Max Length"
+        .Cells(1, 5).Value = "Type"
+        .Cells(1, 6).Value = "Mandatory"
+        
+        Dim i As Long: i = 2
+        For Each k In fieldMap.Keys
+            Set fInfo = fieldMap(k)
+            .Cells(i, 1).Value = k
+            .Cells(i, 2).Value = fInfo("sample")
+            .Cells(i, 3).Value = fInfo("min")
+            .Cells(i, 4).Value = fInfo("max")
+            .Cells(i, 5).Value = fInfo("type")
+            .Cells(i, 6).Value = IIf(fInfo("count") = totalRows, "Yes", "No")
+            i = i + 1
+        Next
+    End With
+End Sub
+
+Function ParseFlatJson(json As String) As Object
+    Dim dict As Object: Set dict = CreateObject("Scripting.Dictionary")
+    On Error GoTo Failed
+
+    json = Trim(json)
+    If Left(json, 1) = "{" Then json = Mid(json, 2)
+    If Right(json, 1) = "}" Then json = Left(json, Len(json) - 1)
+
+    Dim parts() As String: parts = Split(json, ",")
+
+    Dim i As Long
+    For i = LBound(parts) To UBound(parts)
+        Dim pair() As String: pair = Split(parts(i), ":")
+        If UBound(pair) = 1 Then
+            Dim key As String, val As String
+            key = CleanJsonString(pair(0))
+            val = CleanJsonString(pair(1))
+            dict(key) = val
+        End If
+    Next
+
+    Set ParseFlatJson = dict
+    Exit Function
+Failed:
+    Set ParseFlatJson = Nothing
+End Function
+
+Function CleanJsonString(s As String) As String
+    s = Trim(s)
+    If Left(s, 1) = """" Then s = Mid(s, 2)
+    If Right(s, 1) = """" Then s = Left(s, Len(s) - 1)
+    CleanJsonString = s
+End Function
+
+Function GuessType(val As Variant) As String
+    If IsNumeric(val) Then
+        GuessType = "Number"
+    ElseIf LCase(val) = "true" Or LCase(val) = "false" Then
+        GuessType = "Boolean"
+    Else
+        GuessType = "String"
+    End If
+End Function
+
+Function MergeType(t1 As String, t2 As String) As String
+    If t1 = t2 Then
+        MergeType = t1
+    Else
+        MergeType = "Mixed"
+    End If
+End Function
+
